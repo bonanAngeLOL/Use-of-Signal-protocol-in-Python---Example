@@ -2,6 +2,7 @@ import base64
 import json
 import sys
 from dataclasses import dataclass
+import traceback
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
@@ -11,7 +12,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.backends import default_backend
 
 from concurrent.futures import ThreadPoolExecutor
-
+import traceback
 from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives import serialization
 from Crypto.Cipher import AES
@@ -21,7 +22,7 @@ import _pickle as cPickle
 import socket
 
 HOST = '127.0.0.1'  # La dirección IP del host del socket
-PORT = 8085
+PORT = 8090
 
 
 @dataclass
@@ -246,46 +247,75 @@ class User:
         print(f'[]\tDecrypted message:', msg)
 
 
-def listen_server(conn: socket.socket):
+def listen_server(conn: socket.socket, user: User):
+    print("Listening to the server")
     while True:
         data = conn.recv(1024)
         info = json.loads(data.decode("utf8"))
-        if info["command"] == "ratchet":
+        try:
+            if info["command"] == "ratchet":
+                print("ratchet")
+            if info["command"] == "userkeys":
+                requested_user = UserKeys(
+                    IPK=x25519.X25519PublicKey.from_public_bytes(base64.b64decode(info["IPK"].encode("utf8"))),
+                    SPK=x25519.X25519PublicKey.from_public_bytes(base64.b64decode(info["SPK"].encode("utf8"))),
+                    EFK=x25519.X25519PublicKey.from_public_bytes(base64.b64decode(info["EFK"].encode("utf8"))),
+                    OPK=x25519.X25519PublicKey.from_public_bytes(base64.b64decode(info["OPK"].encode("utf8"))),
+                )
+                user.start_x3dh(requested_user)
+                print("!!!3XDH started")
+                prepare = {}
+                prepare["command"] = "do3xdh"
+                prepare["to"] = info["username"]
+                prepare["from"] = user.get_name()
+                conn.send(json.dumps(prepare).encode("utf8"))
+        except Exception:
             pass
-        print(data)
+        print("From server", info)
 
 
 def command(conn: socket.socket):
     prepare = {}
-    command = input("Inserte un commando: ")
-    if command == "enviar":
-        prepare["recipient"] = input("usuario: ")
-        prepare["message"] = input("Message: ")
-    if command == "connect":
-        prepare["recipient"] = input("usuario: ")
-        conn.send(json.dumps(prepare).encode("utf8"))
+    command = ''
+    while command != 'exit':
+        command = input("Inserte un commando: ")
+        if command == "enviar":
+            prepare["recipient"] = input("usuario: ")
+            prepare["message"] = input("Message: ")
+        if command == "connect":
+            prepare["command"] = "connect"
+            prepare["recipient"] = input("usuario: ")
+            try:
+                conn.send(json.dumps(prepare).encode("utf8"))
+            except Exception:
+                traceback.print_exc()
+
 
 if __name__ == "__main__":
 
-    bob = User("bob")
-    bobKeys = bob.keys_to_server()
+    # bob = User("bob")
+    # bobKeys = bob.keys_to_server()
 
-    alice = User("alice")
-    alice.start_x3dh(bobKeys)
+    user = sys.argv[1]
 
-    # aliceKeysPrepared = alice.keys_prepared_send()
+    alice = User(user)
+    # alice.start_x3dh(bobKeys)
+
+    aliceKeysPrepared = alice.keys_prepared_send()
     aliceKeys = alice.keys_to_server()
 
-    bob.responding_x3dh(aliceKeys)
+    # bob.responding_x3dh(aliceKeys)
 
-    alice.init_ratchets()
-    bob.init_ratchets()
+    # alice.init_ratchets()
+    # bob.init_ratchets()
     identifier = None
-    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         with ThreadPoolExecutor(max_workers=2) as executor:
             s.connect((HOST, PORT))  # Iniciar el socket
-            executor.submit(listen_server)
+            try:
+                executor.submit(listen_server, s, alice)
+            except:
+                traceback.print_exc()
             s.sendall(aliceKeysPrepared)  # Enviar mensaje en formato binario
             # data = s.recv(1024)  # Recibir respuesta
             command(s)
@@ -294,17 +324,17 @@ if __name__ == "__main__":
             data = s.recv(1024)  # Recibir respuesta
             if data == '':
                 s.close()
-    """
-    bobDHPublic = bob.get_DHpublic()
-    alice.respond_dh_ratchet(bobDHPublic)
+
+    # bobDHPublic = bob.get_DHpublic()
+    # alice.respond_dh_ratchet(bobDHPublic)
 
     # Alice sends Bob a message and her new DH ratchet public key
-    alice.send(bob, 'Hello Bob!'.encode("utf8"))
+    # alice.send(bob, 'Hello Bob!'.encode("utf8"))
 
     # Bob uses that information to sync with Alice and send her a message
-    bob.send(alice, 'Hello to you too, Alice!'.encode("utf8"))
+    # bob.send(alice, 'Hello to you too, Alice!'.encode("utf8"))
 
-    alice.send(bob, "hola".encode("utf8"))
+    # alice.send(bob, "hola".encode("utf8"))
     """
     Printing keys 
     print('[Alice]\tsend ratchet:', list(map(Libutils.b64, alice.next_send())))
