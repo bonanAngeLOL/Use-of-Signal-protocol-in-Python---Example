@@ -230,12 +230,12 @@ class User:
         self.__send_ratchet = SymmRatchet(shared_send)
         # print('[Alice]\tSend ratchet seed:', Libutils.b64(shared_send))
 
-    def send(self, recipient, msg):
+    def send(self, msg):
         key, iv = self.__send_ratchet.next()
         cipher = AES.new(key, AES.MODE_CBC, iv).encrypt(Libutils.pad(msg))
         # print(f'[{self.__name}]\tSending ciphertext to recipient:', Libutils.b64(cipher))
         # send ciphertext and current DH public key
-        recipient.recv(cipher, self.__DHratchet.public_key())
+        return cipher, self.__DHratchet.public_key()
 
     def recv(self, cipher, sender_pk):
         # receive Bob's new public key and use it to perform a DH
@@ -279,6 +279,7 @@ if __name__ == "__main__":
     bob.responding_x3dh(aliceKeys)
 
     alice.init_ratchets()
+    bobDHPublic = bob.get_DHpublic()
     bob.init_ratchets()
     identifier = None
     """
@@ -295,16 +296,18 @@ if __name__ == "__main__":
             if data == '':
                 s.close()
     """
-    bobDHPublic = bob.get_DHpublic()
+
     alice.respond_dh_ratchet(bobDHPublic)
 
     # Alice sends Bob a message and her new DH ratchet public key
-    alice.send(bob, 'Hello Bob!'.encode("utf8"))
+    cipher, ratchet_k = alice.send('Hello Bob!'.encode("utf8"))
 
+    bob.recv(cipher, ratchet_k)
     # Bob uses that information to sync with Alice and send her a message
-    bob.send(alice, 'Hello to you too, Alice!'.encode("utf8"))
+    cipher, ratchet_k = bob.send('Hello to you too, Alice!'.encode("utf8"))
 
-    alice.send(bob, "hola".encode("utf8"))
+    alice.recv(cipher, ratchet_k)
+    # alice.send(bob, "hola".encode("utf8"))
     """
     Printing keys 
     print('[Alice]\tsend ratchet:', list(map(Libutils.b64, alice.next_send())))

@@ -22,7 +22,7 @@ import _pickle as cPickle
 import socket
 
 HOST = '127.0.0.1'  # La dirección IP del host del socket
-PORT = 8090
+PORT = 8091
 
 
 @dataclass
@@ -231,12 +231,13 @@ class User:
         self.__send_ratchet = SymmRatchet(shared_send)
         # print('[Alice]\tSend ratchet seed:', Libutils.b64(shared_send))
 
-    def send(self, recipient, msg):
+    def send(self, msg):
         key, iv = self.__send_ratchet.next()
         cipher = AES.new(key, AES.MODE_CBC, iv).encrypt(Libutils.pad(msg))
         # print(f'[{self.__name}]\tSending ciphertext to recipient:', Libutils.b64(cipher))
         # send ciphertext and current DH public key
-        recipient.recv(cipher, self.__DHratchet.public_key())
+        # recipient.recv(cipher, self.__DHratchet.public_key())
+        return cipher, self.__DHratchet.public_key()
 
     def recv(self, cipher, sender_pk):
         # receive Bob's new public key and use it to perform a DH
@@ -244,7 +245,7 @@ class User:
         key, iv = self.__recv_ratchet.next()
         # decrypt the message using the new recv ratchet
         msg = Libutils.unpad(AES.new(key, AES.MODE_CBC, iv).decrypt(cipher))
-        print(f'[]\tDecrypted message:', msg)
+        print(f'[RECEIVED MESSAGE -> ]\tDecrypted message:', msg)
 
 
 def listen_server(conn: socket.socket, user: User):
@@ -268,13 +269,48 @@ def listen_server(conn: socket.socket, user: User):
                 prepare["command"] = "do3xdh"
                 prepare["to"] = info["username"]
                 prepare["from"] = user.get_name()
+                user.init_ratchets()
                 conn.send(json.dumps(prepare).encode("utf8"))
+            if info["command"] == "r3xdh":
+                requested_user = UserKeys(
+                    IPK=x25519.X25519PublicKey.from_public_bytes(base64.b64decode(info["IPK"].encode("utf8"))),
+                    SPK=x25519.X25519PublicKey.from_public_bytes(base64.b64decode(info["SPK"].encode("utf8"))),
+                    EFK=x25519.X25519PublicKey.from_public_bytes(base64.b64decode(info["EFK"].encode("utf8"))),
+                    OPK=x25519.X25519PublicKey.from_public_bytes(base64.b64decode(info["OPK"].encode("utf8"))),
+                )
+                user.responding_x3dh(requested_user)
+                user.init_ratchets()
+                dh_public = Libutils.key_to_bytes(user.get_DHpublic())
+                dh_response = {}
+                dh_response["command"] = "public_dh_key"
+                dh_response["public"] = dh_public
+                dh_response["from"] = user.get_name()
+                dh_response["to"] = info["username"]
+                conn.send(json.dumps(dh_response).encode("utf8"))
+                # print(dh_response)
+                print("!!!!!Ok I got the x3dh")
+            if info["command"] == "public_dh_key":
+                user.respond_dh_ratchet(
+                    x25519.X25519PublicKey.from_public_bytes(base64.b64decode(info["public"].encode("utf8")))
+                )
+                print("Ratchet has been initialized successfully!!!")
+            if info["command"] == "receive":
+                print("!!!!!!!! RECEIVED MESSAGE HERE")
+                # It was parsed as follows -> prepare["cipher"] = base64.b64encode(cipher).decode("utf8")
+                try:
+                    user.recv(
+                        base64.b64decode(info["cipher"].encode("utf8")),
+                        x25519.X25519PublicKey.from_public_bytes(base64.b64decode(info["ratchet_k"].encode("utf8")))
+                    )
+                except Exception:
+                    traceback.print_exc()
+                # print("!!!!")
         except Exception:
             pass
         print("From server", info)
 
 
-def command(conn: socket.socket):
+def command(conn: socket.socket, user: User):
     prepare = {}
     command = ''
     while command != 'exit':
@@ -287,6 +323,19 @@ def command(conn: socket.socket):
             prepare["recipient"] = input("usuario: ")
             try:
                 conn.send(json.dumps(prepare).encode("utf8"))
+            except Exception:
+                traceback.print_exc()
+        if command == "message":
+            try:
+                prepare["command"] = "message"
+                prepare["recipient"] = input("usuario: ")
+                message = input("Write a message: ")
+                cipher, ratchet_k = user.send(message.encode("utf8"))
+                prepare["cipher"] = base64.b64encode(cipher).decode("utf8")
+                prepare["ratchet_k"] = Libutils.key_to_bytes(ratchet_k)
+                conn.send(json.dumps(prepare).encode("utf8"))
+                print("message sent !!!", prepare)
+                # conn.send(json.dumps(prepare).encode("utf8"))
             except Exception:
                 traceback.print_exc()
 
@@ -318,7 +367,7 @@ if __name__ == "__main__":
                 traceback.print_exc()
             s.sendall(aliceKeysPrepared)  # Enviar mensaje en formato binario
             # data = s.recv(1024)  # Recibir respuesta
-            command(s)
+            command(s, alice)
             # print('Received', repr(data))  # imprimir respuesta
             s.shutdown(0)
             data = s.recv(1024)  # Recibir respuesta

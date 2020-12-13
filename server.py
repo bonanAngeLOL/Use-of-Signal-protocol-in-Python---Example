@@ -42,21 +42,34 @@ def select_usuario(usuario: str):
 
 
 HOST = '127.0.0.1'  # La dirección IP del host del socket
-PORT = 8090        # Port to listen on (non-privileged ports are > 1023)
+PORT = 8091        # Port to listen on (non-privileged ports are > 1023)
 
 users={}
 
 def atender_usuario(conn, addr):
     while True:
-        print("waiting again")
-        ok = {"command": "confirm"}
-        data = conn.recv(1024)  # Recibir mensaje
-        info = json.loads(data.decode("utf8"))
-        print("just received", info)
-        if info["command"] == "auth":
-            print("Auth section")
+        try:
+            # print("waiting again")
+            ok = {"command": "confirm"}
+            data = conn.recv(1024)  # Recibir mensaje
+            info = json.loads(data.decode("utf8"))
+            # print("just received", info)
+        except Exception:
+            traceback.print_exc()
+        if info["command"] == "message":
             try:
-                print("Trying")
+                # print("in message -", info)
+                mess = {}
+                mess["command"] = "receive"
+                mess["cipher"] = info["cipher"]
+                mess["ratchet_k"] = info["ratchet_k"]
+                users[info["recipient"]]["conn"].sendall(json.dumps(mess).encode("utf8"))
+            except Exception:
+                traceback.print_exc()
+        if info["command"] == "auth":
+            # print("Auth section")
+            try:
+                # print("Trying")
                 id = insertar_usuario(
                     (
                         info["user"],
@@ -66,13 +79,14 @@ def atender_usuario(conn, addr):
                         info["OPK"]
                     )
                 )
-                print("stored")
+                # print("stored")
                 users[info["user"]] = {"id": id, "conn": conn}
-                print("saved")
+                # print("saved")
+                conn.sendall(json.dumps(ok).encode("utf8"))
             except Exception as exception:
-                print("Error")
+                # print("Error")
                 traceback.print_exc()
-            print("tried finished")
+            # print("tried finished")
         if info["command"] == "connect":
             try:
                 user = select_usuario(info["recipient"])
@@ -84,7 +98,7 @@ def atender_usuario(conn, addr):
                     ok["EFK"] = user[0][4]
                     ok["OPK"] = user[0][5]
                     conn.sendall(json.dumps(ok).encode("utf8"))
-                print("select usuario", select_usuario(info["recipient"]))
+                # print("select usuario", select_usuario(info["recipient"]))
                 response = json.loads((conn.recv(1024)).decode("utf8"))
                 ruser = select_usuario(response["from"])
                 ok["command"] = "r3xdh"
@@ -94,9 +108,23 @@ def atender_usuario(conn, addr):
                 ok["EFK"] = ruser[0][4]
                 ok["OPK"] = ruser[0][5]
                 users[response["to"]]["conn"].sendall(json.dumps(ok).encode("utf8"))
+                # Esperando respuesta de llave publica para ratchet
+                # print("!!! Esperanto el publicDH")
+                # resp = conn.recv(1024)
+                # publicDH = json.loads((resp).decode("utf8"))
+                # print("!!! EL public DH llego")
+                # se manda el DH al usuario que inicio la conversacion
+                # users[response["to"]]["conn"].sendall(json.dumps(publicDH).encode("utf8"))
             except Exception:
                 traceback.print_exc()
-        conn.sendall(json.dumps(ok).encode("utf8"))  # Responder mensaje
+        if info["command"] == "public_dh_key":
+            try:
+                print("Sending DH !!!!!!!!!!!!")
+                users[info["to"]]["conn"].sendall(json.dumps(info).encode("utf8"))
+                # print("DH sent!!!!!!!!!!!!!!!!!!!")
+            except Exception:
+                traceback.print_exc()
+
 
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
